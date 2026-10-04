@@ -176,6 +176,8 @@ last_cmd = None
 last_box = None
 lost_count = 0
 ids_at_lost = set()
+id_map = {}
+
 
 while True:
     new_frame = False
@@ -215,7 +217,8 @@ while True:
         else:
             color = (0, 255, 0)
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-        cv2.putText(frame, f"ID{tid}", (x1, y1 -5),
+        show_id = id_map.get(tid, tid)
+        cv2.putText(frame, f"ID{show_id}", (x1, y1 -5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
         if tid in state["scores"]:
             cv2.putText(frame, f"{state['scores'][tid]:.2f}", (x1, y2 +18),
@@ -238,6 +241,7 @@ while True:
             new_id = find_reacquire(boxes, last_box, ids_at_lost)
             if new_id is not None:
                 print("다시 잡음: ID", state["selected"], "->ID", new_id)
+                id_map[new_id] = id_map.get(state["selected"], state["selected"])
                 state["selected"] = new_id
                 last_selected = new_id
                 lost_count =0
@@ -251,10 +255,12 @@ while True:
     if state['selected'] is None:
         cmd = "WAITING (select a person)"
     elif target_box is None:
+
         if lost_count <= REACQ_FRAMES:
-            cmd = f"STOP (ID {state['selected']} lost, searching)"
+            cmd = f"STOP (ID {id_map.get(state['selected'], state['selected'])} lost, searching)"
         else:
-            cmd = f"STOP (ID {state['selected']} lost, gave up)"
+            cmd = f"STOP (ID {id_map.get(state['selected'], state['selected'])} lost, gave up)"
+
     else:
         x1, y1, x2, y2 = target_box
         target = ((x1 + x2) / 2, (y1 + y2) / 2)
