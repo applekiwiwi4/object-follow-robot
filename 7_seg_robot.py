@@ -15,7 +15,7 @@ from ultralytics.trackers.basetrack import BaseTrack
 # ============================================================
 # 설정값 (자주 바꾸는 숫자는 여기 모아 둠)
 # ============================================================
-VIDEO_PATH = "./video/walking3.mp4"   # 웹캠을 쓰려면 0 으로 바꾸기
+VIDEO_PATH = "./video/walking1.mp4"   # 웹캠을 쓰려면 0 으로 바꾸기
 
 CONF = 0.4          # YOLO 확신도 기준 (높이면 사람이 덜 잡힘)
 MIN_H = 80          # 키가 이보다 작은(멀리 있는) 사람은 무시
@@ -31,8 +31,10 @@ FAR_RATIO = 0.4     # 사람 키가 화면 높이의 40% 이하이면 너무 멂
 REACQ_FRAMES = 90   # 놓친 뒤 몇 화면 동안 다시 찾아볼지
 REACQ_DIST = 1.5    # 마지막 위치에서 (사람 폭 x 이 값) 안에 나타나야 같은 사람으로 봄
 
+COLOR_MIN = 0.5 # 옷 색깔 비슷한 정도가 이보다 낮으면 다른 사람으로 봄(0~1)
+
 # 세그멘테이션 색칠 진하기 (0 ~ 1)
-FILL_ALPHA = 0.4
+FILL_ALPHA = 0   # 색칠 진하기 (0 = 선만, 0.4 = 반투명 색칠)
 
 # ============================================================
 # 준비
@@ -182,7 +184,18 @@ def draw_command(frame, cmd):
 # ============================================================
 # 다시 잡기 함수
 # ============================================================
-def find_reacquire(boxes, last_box, ids_at_lost):
+
+def get_color_hist(img, poly):
+    mask = np.zeros(img.shape[:2], dtype=np.uint8)
+    cv2.fillPoly(mask, [poly], 255)
+
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+
+    hist = cv2.calcHist([hsv], [0, 1], mask, [30, 32], [0, 180, 0, 256])
+    cv2.normalize(hist, hist)
+    return hist
+
+def find_reacquire(boxes, last_box, ids_at_lost, img, polys, target_hist):
     lx1, ly1, lx2, ly2 = last_box
     lcx = (lx1 + lx2) / 2
     lcy = (ly1 + ly2) / 2
@@ -190,6 +203,7 @@ def find_reacquire(boxes, last_box, ids_at_lost):
     lh = ly2 - ly1
 
     best_id = None
+    best_sim = 0
     best_dist = lw * REACQ_DIST
 
     for tid, (x1, y1, x2, y2) in boxes:
@@ -198,15 +212,24 @@ def find_reacquire(boxes, last_box, ids_at_lost):
         h = y2 - y1
         if h < lh * 0.7 or h > lh * 1.3:    # 키가 너무 다르면 제외
             continue
+
+        # 새로 추가: 옷 색깔이 너무 다르면 제외
+        sim = 1.0
+        if target_hist is not None and tid in polys:
+            cand_hist = get_color_hist(img, polys[tid])
+            sim = cv2.compareHist(target_hist, cand_hist, cv2.HISTCMP_CORREL)
+            if sim < COLOR_MIN:
+                continue
+
         cx = (x1 + x2) / 2
         cy = (y1 + y2) / 2
         dist = ((cx - lcx) ** 2 + (cy - lcy) ** 2) ** 0.5
         if dist < best_dist:
             best_dist = dist
             best_id = tid
+            best_sim = sim
 
-    return best_id
-
+    return best_id, best_sim
 
 # ============================================================
 # 메인 반복
@@ -221,6 +244,8 @@ last_cmd = None
 last_box = None
 lost_count = 0
 ids_at_lost = set()
+target_hist = None
+hist_owner = None
 
 while True:
     new_frame = False
@@ -289,12 +314,23 @@ while True:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
     # ---------- 4. 놓친 사람 다시 잡기 ----------
-    if state["selected"] is None:
+    if state['selected'] != hist_owner:
+        target_hist = None
+        hist_owner = state['selected']
+
+    if state['selected'] is None:
         last_box = None
         lost_count = 0
     elif target_box is not None:
         last_box = target_box
         lost_count = 0
+
+        if new_frame and state["selected"] in polys:
+            hist = get_color_hist(raw, polys[state["selected"]])
+            if target_hist is None:
+                target_hist = hist
+            else:
+                target_hist = target_hist * 0.9 + hist * 0.1
     elif last_box is not None and new_frame:
         if lost_count == 0:
             ids_at_lost = set()
@@ -303,13 +339,16 @@ while True:
         lost_count += 1
 
         if lost_count <= REACQ_FRAMES:
-            new_id = find_reacquire(boxes, last_box, ids_at_lost)
+            new_id, sim = find_reacquire(boxes, last_box, ids_at_lost,
+                                         raw, polys, target_hist)
             if new_id is not None:
                 print("다시 잡음: ID", show_id(state["selected"]),
-                      "(내부 번호", state["selected"], "->", new_id, ")")
+                      "(내부 번호", state["selected"], "->", new_id,
+                      ", 색 유사도", round(sim, 2), ")")
                 id_map[new_id] = show_id(state["selected"])
                 state["selected"] = new_id
-                last_selected = new_id      # 로봇이 처음 위치로 돌아가지 않게
+                last_selected = new_id
+                hist_owner = new_id     # 같은 사람이니 색깔 기억 유지
                 lost_count = 0
 
     # ---------- 5. 로봇 ----------
