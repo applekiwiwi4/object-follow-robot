@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 from config import *
 from follow.detector import Detector
+from follow.selector import Selector
 # ============================================================
 # 준비
 # ============================================================
@@ -24,36 +25,17 @@ if not cap.isOpened():
 boxes = []      # [(추적번호, (x1, y1, x2, y2)), ...]
 polys = {}      # {추적번호: 몸 윤곽선 점들}
 id_map = {}     # {새 번호: 원래 번호}  다시 잡은 사람을 원래 번호로 보여주기용
+selector = Selector(id_map)
 
-state = {"cur": None, "selected": None,
-         "sdrawing": False, "sstart": None, "scores": {},
-         "paused": False}
 
 
 # ============================================================
 # 선택 관련 함수
 # ============================================================
-def point_in_box(x, y, box):
-    x1, y1, x2, y2 = box
-    return x1 <= x <= x2 and y1 <= y <= y2
 
 
-def iou(a, b):
-    ax1, ay1, ax2, ay2 = a
-    bx1, by1, bx2, by2 = b
-    ix1 = max(ax1, bx1)
-    iy1 = max(ay1, by1)
-    ix2 = min(ax2, bx2)
-    iy2 = min(ay2, by2)
-    iw = max(0, ix2 - ix1)
-    ih = max(0, iy2 - iy1)
-    inter = iw * ih
-    area_a = (ax2 - ax1) * (ay2 - ay1)
-    area_b = (bx2 - bx1) * (by2 - by1)
-    union = area_a + area_b - inter
-    if union == 0:
-        return 0
-    return inter / union
+
+
 
 
 def show_id(tid):
@@ -61,52 +43,12 @@ def show_id(tid):
     return id_map.get(tid, tid)
 
 
-def select_by_point(x, y):
-    state["scores"] = {}
-    state["selected"] = None
-    for tid, box in boxes:
-        if point_in_box(x, y, box):
-            state["selected"] = tid
-            break
-    if state["selected"] is None:
-        print("선택 해제")
-    else:
-        print("선택: ID", show_id(state["selected"]))
 
 
-def select_by_drag(drag):
-    state["scores"] = {}
-    best_id = None
-    best_score = 0
-    for tid, box in boxes:
-        score = iou(drag, box)
-        state["scores"][tid] = score
-        if score > best_score:
-            best_score = score
-            best_id = tid
-    if best_score < 0.1:
-        state["selected"] = None
-        print("선택 해제 (많이 겹치는 사람 없음)")
-    else:
-        state["selected"] = best_id
-        print("선택: ID", show_id(best_id), "점수:", round(best_score, 2))
 
 
-def on_mouse(event, x, y, flags, param):
-    if event == cv2.EVENT_LBUTTONDOWN:
-        state["sdrawing"] = True
-        state["sstart"] = (x, y)
-        state["cur"] = (x, y)
-    elif event == cv2.EVENT_MOUSEMOVE and state["sdrawing"]:
-        state["cur"] = (x, y)
-    elif event == cv2.EVENT_LBUTTONUP and state["sdrawing"]:
-        state["sdrawing"] = False
-        x0, y0 = state["sstart"]
-        drag = (min(x0, x), min(y0, y), max(x0, x), max(y0, y))
-        if drag[2] - drag[0] > 3 and drag[3] - drag[1] > 3:
-            select_by_drag(drag)
-        else:
-            select_by_point(x, y)
+
+
 
 
 # ============================================================
@@ -209,9 +151,10 @@ def find_reacquire(boxes, last_box, ids_at_lost, img, polys, target_hist):
 # 메인 반복
 # ============================================================
 cv2.namedWindow("follow")
-cv2.setMouseCallback("follow", on_mouse)
+cv2.setMouseCallback("follow", selector.on_mouse)
 
 raw = None
+paused = False
 robot = None
 last_selected = None
 last_cmd = None
@@ -225,7 +168,7 @@ while True:
     new_frame = False
 
     # ---------- 1. 새 화면 읽기 + YOLO 추적 (일시정지면 건너뜀) ----------
-    if not state["paused"] or raw is None:
+    if not paused or raw is None:
         ok, raw = cap.read()
         if not ok:
             print("영상이 끝났습니다.")
@@ -237,6 +180,7 @@ while True:
             raw = cv2.resize(raw, None, fx=scale, fy=scale)
 
         boxes, polys = detector.detect(raw)
+        selector.boxes = boxes
 
     frame = raw.copy()
     h, w = frame.shape[:2]
@@ -245,7 +189,7 @@ while True:
     overlay = frame.copy()
     for tid, box in boxes:
         if tid in polys:
-            if tid == state["selected"]:
+            if tid == selector.selected:
                 fill = (0, 0, 255)
             else:
                 fill = (0, 255, 0)
@@ -255,7 +199,7 @@ while True:
     # ---------- 3. 윤곽선, 번호 그리기 + 선택한 사람 찾기 ----------
     target_box = None
     for tid, (x1, y1, x2, y2) in boxes:
-        if tid == state["selected"]:
+        if tid == selector.selected:
             color = (0, 0, 255)
             target_box = (x1, y1, x2, y2)
         else:
@@ -268,24 +212,24 @@ while True:
 
         cv2.putText(frame, f"ID {show_id(tid)}", (x1, y1 - 5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-        if tid in state["scores"]:
-            cv2.putText(frame, f"{state['scores'][tid]:.2f}", (x1, y2 + 18),
+        if tid in selector.scores:
+            cv2.putText(frame, f"{selector.scores[tid]:.2f}", (x1, y2 + 18),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
     # ---------- 4. 놓친 사람 다시 잡기 ----------
-    if state['selected'] != hist_owner:
+    if selector.selected != hist_owner:
         target_hist = None
-        hist_owner = state['selected']
+        hist_owner = selector.selected
 
-    if state['selected'] is None:
+    if selector.selected is None:
         last_box = None
         lost_count = 0
     elif target_box is not None:
         last_box = target_box
         lost_count = 0
 
-        if new_frame and state["selected"] in polys:
-            hist = get_color_hist(raw, polys[state["selected"]])
+        if new_frame and selector.selected in polys:
+            hist = get_color_hist(raw, polys[selector.selected])
             if target_hist is None:
                 target_hist = hist
             else:
@@ -301,28 +245,28 @@ while True:
             new_id, sim = find_reacquire(boxes, last_box, ids_at_lost,
                                          raw, polys, target_hist)
             if new_id is not None:
-                print("다시 잡음: ID", show_id(state["selected"]),
-                      "(내부 번호", state["selected"], "->", new_id,
+                print("다시 잡음: ID", show_id(selector.selected),
+                      "(내부 번호", selector.selected, "->", new_id,
                       ", 색 유사도", round(sim, 2), ")")
-                id_map[new_id] = show_id(state["selected"])
-                state["selected"] = new_id
+                id_map[new_id] = show_id(selector.selected)
+                selector.selected = new_id
                 last_selected = new_id
                 hist_owner = new_id     # 같은 사람이니 색깔 기억 유지
                 lost_count = 0
 
     # ---------- 5. 로봇 ----------
-    if state["selected"] != last_selected:
+    if selector.selected != last_selected:
         robot = None
-        last_selected = state["selected"]
+        last_selected = selector.selected
 
     target = None
-    if state["selected"] is None:
+    if selector.selected is None:
         cmd = "WAITING (select a person)"
     elif target_box is None:
         if lost_count <= REACQ_FRAMES:
-            cmd = f"STOP (ID {show_id(state['selected'])} lost, searching)"
+            cmd = f"STOP (ID {show_id(selector.selected)} lost, searching)"
         else:
-            cmd = f"STOP (ID {show_id(state['selected'])} lost, gave up)"
+            cmd = f"STOP (ID {show_id(selector.selected)} lost, gave up)"
     else:
         x1, y1, x2, y2 = target_box
         target = ((x1 + x2) / 2, y2)        # 발 위치를 따라감
@@ -341,12 +285,12 @@ while True:
         last_cmd = cmd
 
     # ---------- 6. 기타 표시 ----------
-    if state["paused"]:
+    if paused:
         cv2.putText(frame, "PAUSED", (w - 130, 28),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
 
-    if state["sdrawing"]:
-        cv2.rectangle(frame, state["sstart"], state["cur"], (255, 0, 255), 1)
+    if selector.dragging:
+        cv2.rectangle(frame, selector.drag_start, selector.drag_cur, (255, 0, 255), 1)
 
     cv2.putText(frame, "Click/Drag: select  SPACE: pause  C: clear  ESC: quit",
                 (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
@@ -358,10 +302,9 @@ while True:
     if key == 27:
         break
     if key == 32:
-        state["paused"] = not state["paused"]
+        paused = not paused
     if key == ord("c"):
-        state["selected"] = None
-        state["scores"] = {}
+       selector.clear()
     if cv2.getWindowProperty("follow", cv2.WND_PROP_VISIBLE) < 1:
         break
 
