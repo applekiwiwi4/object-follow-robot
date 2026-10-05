@@ -9,16 +9,12 @@
 
 import cv2
 import numpy as np
-from ultralytics import YOLO
-from ultralytics.trackers.basetrack import BaseTrack
 from config import *
-
-
+from follow.detector import Detector
 # ============================================================
 # 준비
 # ============================================================
-model = YOLO(MODEL_PATH)   # 세그멘테이션 모델
-BaseTrack.reset_id()             # 추적 번호를 1번부터 시작
+detector = Detector()            # 추적 번호를 1번부터 시작
 
 cap = cv2.VideoCapture(VIDEO_PATH)
 if not cap.isOpened():
@@ -240,22 +236,7 @@ while True:
             scale = MAX_WIDTH / raw.shape[1]
             raw = cv2.resize(raw, None, fx=scale, fy=scale)
 
-        results = model.track(raw, persist=True, classes=[0],
-                              conf=CONF, iou=NMS_IOU, verbose=False)
-
-        boxes = []
-        polys = {}
-        r = results[0]
-        for i, b in enumerate(r.boxes):
-            if b.id is None:
-                continue
-            tid = int(b.id[0])
-            x1, y1, x2, y2 = [int(v) for v in b.xyxy[0].tolist()]
-            if (y2 - y1) < MIN_H:
-                continue
-            boxes.append((tid, (x1, y1, x2, y2)))
-            if r.masks is not None and len(r.masks.xy[i]) > 0:
-                polys[tid] = r.masks.xy[i].astype(np.int32)
+        boxes, polys = detector.detect(raw)
 
     frame = raw.copy()
     h, w = frame.shape[:2]
