@@ -1,0 +1,6 @@
+# PyTorch는 README의 설치 2단계대로 먼저 따로 설치하세요 (CPU 버전).
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+ultralytics
+opencv-python
+numpy
