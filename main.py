@@ -13,6 +13,7 @@ from config import *
 from follow.detector import Detector
 from follow.selector import Selector
 from follow.reid import ReIdentifier
+from follow.robot import Robot
 # ============================================================
 # 준비
 # ============================================================
@@ -52,33 +53,6 @@ selector = Selector(reid.id_map)
 # ============================================================
 # 로봇 관련 함수
 # ============================================================
-def decide_command(box, frame_w, frame_h):
-    x1, y1, x2, y2 = box
-    center_x = (x1 + x2) / 2
-    offset = center_x - frame_w / 2      # 음수면 왼쪽, 양수면 오른쪽
-    h_ratio = (y2 - y1) / frame_h        # 사람 키가 화면에서 차지하는 비율
-
-    if offset < -CENTER_TOL:
-        return "TURN LEFT"
-    if offset > CENTER_TOL:
-        return "TURN RIGHT"
-    if h_ratio > NEAR_RATIO:
-        return "BACKWARD"
-    if h_ratio < FAR_RATIO:
-        return "FORWARD"
-    return "STOP (good distance)"
-
-
-def move_robot(robot, target):
-    dx = target[0] - robot[0]
-    dy = target[1] - robot[1]
-    dist = (dx ** 2 + dy ** 2) ** 0.5
-    if dist > FOLLOW_DIST:
-        step = min(ROBOT_SPEED, dist - FOLLOW_DIST)
-        robot[0] += dx / dist * step
-        robot[1] += dy / dist * step
-
-
 def draw_robot(frame, robot, target):
     rx, ry = int(robot[0]), int(robot[1])
     if target is not None:
@@ -104,10 +78,8 @@ cv2.setMouseCallback("follow", selector.on_mouse)
 
 raw = None
 paused = False
-robot = None
-last_selected = None
 last_cmd = None
-
+robot = Robot()
 
 
 while True:
@@ -168,34 +140,17 @@ while True:
                          raw, new_frame)
     if new_id is not None:
         selector.selected = new_id
-        last_selected = new_id      # 로봇이 처음 위치로 돌아가지 않게
+        robot.keep_following(new_id)     # 로봇이 처음 위치로 돌아가지 않게
       
     # ---------- 5. 로봇 ----------
-    if selector.selected != last_selected:
-        robot = None
-        last_selected = selector.selected
+    cmd = robot.update(selector.selected,
+                       reid.show_id(selector.selected),
+                       target_box, w, h, new_frame,
+                       reid.is_searching())
 
-    target = None
-    if selector.selected is None:
-        cmd = "WAITING (select a person)"
-    elif target_box is None:
-        if reid.is_searching():
-            cmd = f"STOP (ID {reid.show_id(selector.selected)} lost, searching)"
-        else:
-            cmd = f"STOP (ID {reid.show_id(selector.selected)} lost, gave up)"
-    else:
-        x1, y1, x2, y2 = target_box
-        target = ((x1 + x2) / 2, y2)        # 발 위치를 따라감
-        if robot is None:
-            robot = [w / 2, h - 40.0]       # 화면 아래 가운데에서 출발
-        if new_frame:
-            move_robot(robot, target)
-        cmd = decide_command(target_box, w, h)
-
-    if robot is not None:
-        draw_robot(frame, robot, target)
+    if robot.pos is not None:
+        draw_robot(frame, robot.pos, robot.target)
     draw_command(frame, cmd)
-
     if cmd != last_cmd:
         print("명령:", cmd)
         last_cmd = cmd
