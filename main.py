@@ -12,6 +12,7 @@ import numpy as np
 from config import *
 from follow.detector import Detector
 from follow.selector import Selector
+from follow.reid import ReIdentifier
 # ============================================================
 # 준비
 # ============================================================
@@ -23,9 +24,9 @@ if not cap.isOpened():
     exit()
 
 boxes = []      # [(추적번호, (x1, y1, x2, y2)), ...]
-polys = {}      # {추적번호: 몸 윤곽선 점들}
-id_map = {}     # {새 번호: 원래 번호}  다시 잡은 사람을 원래 번호로 보여주기용
-selector = Selector(id_map)
+polys = {}      # {추적번호: 몸 윤곽선 점들}    
+reid = ReIdentifier()
+selector = Selector(reid.id_map)
 
 
 
@@ -38,9 +39,6 @@ selector = Selector(id_map)
 
 
 
-def show_id(tid):
-    """화면에 보여줄 번호 (다시 잡은 사람은 원래 번호)"""
-    return id_map.get(tid, tid)
 
 
 
@@ -97,55 +95,6 @@ def draw_command(frame, cmd):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
 
 
-# ============================================================
-# 다시 잡기 함수
-# ============================================================
-
-def get_color_hist(img, poly):
-    mask = np.zeros(img.shape[:2], dtype=np.uint8)
-    cv2.fillPoly(mask, [poly], 255)
-
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-
-    hist = cv2.calcHist([hsv], [0, 1], mask, [30, 32], [0, 180, 0, 256])
-    cv2.normalize(hist, hist)
-    return hist
-
-def find_reacquire(boxes, last_box, ids_at_lost, img, polys, target_hist):
-    lx1, ly1, lx2, ly2 = last_box
-    lcx = (lx1 + lx2) / 2
-    lcy = (ly1 + ly2) / 2
-    lw = lx2 - lx1
-    lh = ly2 - ly1
-
-    best_id = None
-    best_sim = 0
-    best_dist = lw * REACQ_DIST
-
-    for tid, (x1, y1, x2, y2) in boxes:
-        if tid in ids_at_lost:              # 놓칠 때 이미 있던 사람은 제외
-            continue
-        h = y2 - y1
-        if h < lh * 0.7 or h > lh * 1.3:    # 키가 너무 다르면 제외
-            continue
-
-        # 새로 추가: 옷 색깔이 너무 다르면 제외
-        sim = 1.0
-        if target_hist is not None and tid in polys:
-            cand_hist = get_color_hist(img, polys[tid])
-            sim = cv2.compareHist(target_hist, cand_hist, cv2.HISTCMP_CORREL)
-            if sim < COLOR_MIN:
-                continue
-
-        cx = (x1 + x2) / 2
-        cy = (y1 + y2) / 2
-        dist = ((cx - lcx) ** 2 + (cy - lcy) ** 2) ** 0.5
-        if dist < best_dist:
-            best_dist = dist
-            best_id = tid
-            best_sim = sim
-
-    return best_id, best_sim
 
 # ============================================================
 # 메인 반복
@@ -158,11 +107,8 @@ paused = False
 robot = None
 last_selected = None
 last_cmd = None
-last_box = None
-lost_count = 0
-ids_at_lost = set()
-target_hist = None
-hist_owner = None
+
+
 
 while True:
     new_frame = False
@@ -210,50 +156,20 @@ while True:
         else:
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
-        cv2.putText(frame, f"ID {show_id(tid)}", (x1, y1 - 5),
+        cv2.putText(frame, f"ID {reid.show_id(tid)}", (x1, y1 - 5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
         if tid in selector.scores:
             cv2.putText(frame, f"{selector.scores[tid]:.2f}", (x1, y2 + 18),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
+
     # ---------- 4. 놓친 사람 다시 잡기 ----------
-    if selector.selected != hist_owner:
-        target_hist = None
-        hist_owner = selector.selected
-
-    if selector.selected is None:
-        last_box = None
-        lost_count = 0
-    elif target_box is not None:
-        last_box = target_box
-        lost_count = 0
-
-        if new_frame and selector.selected in polys:
-            hist = get_color_hist(raw, polys[selector.selected])
-            if target_hist is None:
-                target_hist = hist
-            else:
-                target_hist = target_hist * 0.9 + hist * 0.1
-    elif last_box is not None and new_frame:
-        if lost_count == 0:
-            ids_at_lost = set()
-            for tid, box in boxes:
-                ids_at_lost.add(tid)
-        lost_count += 1
-
-        if lost_count <= REACQ_FRAMES:
-            new_id, sim = find_reacquire(boxes, last_box, ids_at_lost,
-                                         raw, polys, target_hist)
-            if new_id is not None:
-                print("다시 잡음: ID", show_id(selector.selected),
-                      "(내부 번호", selector.selected, "->", new_id,
-                      ", 색 유사도", round(sim, 2), ")")
-                id_map[new_id] = show_id(selector.selected)
-                selector.selected = new_id
-                last_selected = new_id
-                hist_owner = new_id     # 같은 사람이니 색깔 기억 유지
-                lost_count = 0
-
+    new_id = reid.update(selector.selected, target_box, boxes, polys,
+                         raw, new_frame)
+    if new_id is not None:
+        selector.selected = new_id
+        last_selected = new_id      # 로봇이 처음 위치로 돌아가지 않게
+      
     # ---------- 5. 로봇 ----------
     if selector.selected != last_selected:
         robot = None
@@ -263,10 +179,10 @@ while True:
     if selector.selected is None:
         cmd = "WAITING (select a person)"
     elif target_box is None:
-        if lost_count <= REACQ_FRAMES:
-            cmd = f"STOP (ID {show_id(selector.selected)} lost, searching)"
+        if reid.is_searching():
+            cmd = f"STOP (ID {reid.show_id(selector.selected)} lost, searching)"
         else:
-            cmd = f"STOP (ID {show_id(selector.selected)} lost, gave up)"
+            cmd = f"STOP (ID {reid.show_id(selector.selected)} lost, gave up)"
     else:
         x1, y1, x2, y2 = target_box
         target = ((x1 + x2) / 2, y2)        # 발 위치를 따라감
