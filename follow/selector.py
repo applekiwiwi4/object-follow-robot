@@ -71,7 +71,12 @@ class Selector:
         else:
             self.selected = best_id
             print("선택: ID", self.show_id(best_id), "점수:", round(best_score, 2))
-
+    def selected_box(self):
+        """선택한 사람의 이번 화면 네모 (안 보이면 None)"""
+        for tid, box in self.boxes:
+            if tid == self.selected:
+                return box
+        return None
     def on_mouse(self, event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
             self.dragging = True
