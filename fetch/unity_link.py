@@ -23,27 +23,37 @@ def open_server():
     return server
 
 
-def recv_exact(conn, n):
-    """정확히 n바이트를 다 받을 때까지 읽기. 연결이 끊기면 None"""
+def recv_exact(conn, n, on_idle=None):
+    """
+    정확히 n바이트를 다 받을 때까지 읽기. 연결이 끊기면 None
+    on_idle: 기다리는 동안 계속 불러 줄 함수 (창이 얼지 않게).
+             True 를 돌려주면 기다리기를 그만두고 None 을 돌려줌
+    """
     buf = b""
     while len(buf) < n:
-        chunk = conn.recv(n - len(buf))
+        try:
+            chunk = conn.recv(n - len(buf))
+        except socket.timeout:
+            # 아직 데이터가 안 옴 -> 그동안 창 살려 두기
+            if on_idle is not None and on_idle():
+                return None
+            continue
         if not chunk:
             return None
         buf += chunk
     return buf
 
 
-def recv_block(conn):
+def recv_block(conn, on_idle=None):
     """[크기 4바이트] + [내용] 하나 받기"""
-    head = recv_exact(conn, 4)
+    head = recv_exact(conn, 4, on_idle)
     if head is None:
         return None
     size = struct.unpack(">I", head)[0]
-    return recv_exact(conn, size)
+    return recv_exact(conn, size, on_idle)
 
 
-def recv_packet(conn):
+def recv_packet(conn, on_idle=None):
     """
     Unity가 보낸 정보와 사진 한 묶음 받기.
     반환: (frame, info)  연결이 끊기면 (None, None)
@@ -51,10 +61,10 @@ def recv_packet(conn):
       info  : {"width": 640, "height": 480,
                "items": [{"name": "cup", "box": [x1, y1, x2, y2]}, ...]}
     """
-    info_bytes = recv_block(conn)
+    info_bytes = recv_block(conn, on_idle)
     if info_bytes is None:
         return None, None
-    jpg = recv_block(conn)
+    jpg = recv_block(conn, on_idle)
     if jpg is None:
         return None, None
     # 정보가 망가져서 왔으면 이번 장은 "소지품 없음"으로 처리 (프로그램이 꺼지지 않게)
