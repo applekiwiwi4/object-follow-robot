@@ -11,6 +11,7 @@
 #                  > Run In Background 체크 (Python 창을 클릭해도 Unity가 멈추지 않게)
 
 import cv2
+import command_box
 
 from fetch_task import ELDER_NAME, FetchTask
 from unity_detect import ITEM_NAMES, UNITY_COLOR, draw
@@ -60,10 +61,9 @@ def main():
         if key == 27:
             state["quit"] = True
         elif key in (ord("c"), ord("C")):
-            task.cancel()
+           command_box.put_cancel("keyboard")
         elif ord("1") <= key <= ord("5"):
-            task.request(ITEM_NAMES[key - ord("1")])
-
+            command_box.put_fetch(ITEM_NAMES[key - ord("1")], "keyboard")
     def on_idle():
         """Unity 사진을 기다리는 동안: 창을 살려 두고 키도 받기"""
         handle_key(cv2.waitKey(20) & 0xFF)
@@ -97,6 +97,12 @@ def main():
             holding = info.get("holding", "")
             h, w = frame.shape[:2]
 
+            for c in command_box.get_all():
+                print(f"[{c['source']}] 요청", c["type"], c.get("item", ""))
+                if c["type"] == "fetch":
+                    task.request(c["item"])
+                elif c["type"] == "cancel":
+                    task.cancel()
             cmd = task.update(items + elders, holding, w, h)
 
             draw(frame, items, UNITY_COLOR, "unity")
