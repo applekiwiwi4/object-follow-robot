@@ -12,6 +12,7 @@
 
 import cv2
 import command_box
+from voice_input import VoiceInput
 
 from fetch_task import ELDER_NAME, FetchTask
 from unity_detect import ITEM_NAMES, UNITY_COLOR, draw
@@ -48,6 +49,7 @@ def draw_status(frame, cmd, holding):
 
 def main():
     task = FetchTask()
+    voice = VoiceInput()
     server = open_server()
 
     # 창을 미리 만들어 두기 (마우스로 크기 조절 가능)
@@ -64,6 +66,10 @@ def main():
            command_box.put_cancel("keyboard")
         elif ord("1") <= key <= ord("5"):
             command_box.put_fetch(ITEM_NAMES[key - ord("1")], "keyboard")
+        elif key in(ord("v"), ord("V")):
+            voice.start_listening()
+
+
     def on_idle():
         """Unity 사진을 기다리는 동안: 창을 살려 두고 키도 받기"""
         handle_key(cv2.waitKey(20) & 0xFF)
@@ -108,6 +114,9 @@ def main():
             draw(frame, items, UNITY_COLOR, "unity")
             draw(frame, elders, ELDER_COLOR, "unity")
             draw_status(frame, cmd, holding)
+
+            cv2.putText(frame, voice.status, (w - 220, 50),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
             cv2.imshow(WINDOW, frame)
 
             send_reply(conn, {"items": items, "cmd": cmd})
