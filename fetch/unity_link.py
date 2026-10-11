@@ -17,7 +17,13 @@ PORT = 5005          # Unity와 약속한 번호
 def open_server():
     """Unity의 연결을 기다릴 서버 만들기"""
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+        # 윈도우: 예전 Python 이 이 번호를 쓰고 있으면 "같이 쓰지 말고" 에러가 나게.
+        # (SO_REUSEADDR 를 쓰면 윈도우에서는 두 Python 이 같은 번호를 같이 잡아서
+        #  Unity 가 엉뚱한 예전 Python 에 연결될 수 있음)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+    else:
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((HOST, PORT))
     server.listen(1)
     return server
