@@ -1,7 +1,7 @@
 # 음성 요청 전용: Python 은 "귀"만 맡고, 심부름 판단과 운전은 Unity 머리(FetchBrain)가 한다
 #
-#   V 키 -> 3초 동안 말하기 ("컵 가져다줘", "리모컨 가져와", "취소")
-#   1 ~ 5 키, C 키도 됨 (이 창을 클릭한 뒤)
+#   V 키 -> 3초 동안 말하기 ("컵 가져다줘", "따라와", "그만", "취소")
+#   1 ~ 5, C(취소), G(따라와), S(모두 멈춤) 키도 됨 (이 창을 클릭한 뒤)
 #   ESC : 종료
 #
 # 실행 순서: 이 프로그램 먼저 -> Unity ▶ -> 왼쪽 위가 [UNITY BRAIN + VOICE] 인지 확인 -> V
@@ -56,6 +56,10 @@ def main():
             voice.start_listening()
         elif key in (ord("c"), ord("C")):
             command_box.put_cancel("keyboard")
+        elif key in (ord("g"), ord("G")):
+            command_box.put_follow("keyboard")
+        elif key in (ord("s"), ord("S")):
+            command_box.put_stop("keyboard")
         elif ord("1") <= key <= ord("5"):
             command_box.put_fetch(ITEM_NAMES[key - ord("1")], "keyboard")
 
@@ -103,7 +107,7 @@ def main():
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2)
             cv2.putText(frame, "last: " + state["last"], (10, 50),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            cv2.putText(frame, "V: speak   1-5: item   C: cancel   ESC: quit",
+            cv2.putText(frame, "V: speak  1-5: item  C: cancel  G: follow  S: stop  ESC",
                         (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             cv2.imshow(WINDOW, frame)
 
