@@ -1,6 +1,7 @@
-# 음성 요청 전용: Python 은 "귀"만 맡고, 심부름 판단과 운전은 Unity 머리(FetchBrain)가 한다
+# 음성 + 손짓 요청: Python 은 "귀와 눈"만 맡고, 심부름 판단과 운전은 Unity 머리(FetchBrain)가 한다
 #
 #   V 키 -> 3초 동안 말하기 ("컵 가져다줘", "따라와", "그만", "취소")
+#   H 키 -> 웹캠 손짓 켜기/끄기 (한 손 들기 = 따라와, 두 손 들기 = 멈춤)
 #   1 ~ 5, C(취소), G(따라와), S(모두 멈춤) 키도 됨 (이 창을 클릭한 뒤)
 #   ESC : 종료
 #
@@ -17,9 +18,11 @@ import cv2
 import command_box
 from unity_detect import ITEM_NAMES, UNITY_COLOR, draw
 from unity_link import PORT, open_server, recv_packet, send_reply
+from gesture_input import GestureInput
 from voice_input import VoiceInput
 
 WINDOW = "Unity Robot Eye - Voice"
+GESTURE_WINDOW = "Gesture Camera"
 ELDER_COLOR = (200, 100, 255)
 
 
@@ -30,16 +33,17 @@ def new_request_id():
 
 def main():
     voice = VoiceInput()
+    gesture = GestureInput()
     server = open_server()
 
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(WINDOW, 640, 480)
 
-    state = {"quit": False, "req": None, "sent": False, "last": "-"}
+    state = {"quit": False, "req": None, "sent": False, "last": "-", "cam_shown": False}
 
     def push(kind, item, source):
         """Unity 로 보낼 요청 만들기. 같은 요청은 Unity 가 id 로 한 번만 실행함"""
-        state["req"] = {"id": new_request_id(), "type": kind, "item": item or ""}
+        state["req"] = {"id": new_request_id(), "type": kind, "item": item or "", "source": source}
         state["sent"] = False
         state["last"] = f"[{source}] {kind} {item or ''}"
         print(f"[{source}] 요청 -> Unity:", kind, item or "")
@@ -54,6 +58,8 @@ def main():
             state["quit"] = True
         elif key in (ord("v"), ord("V")):
             voice.start_listening()
+        elif key in (ord("h"), ord("H")):
+            gesture.toggle()
         elif key in (ord("c"), ord("C")):
             command_box.put_cancel("keyboard")
         elif key in (ord("g"), ord("G")):
@@ -63,8 +69,18 @@ def main():
         elif ord("1") <= key <= ord("5"):
             command_box.put_fetch(ITEM_NAMES[key - ord("1")], "keyboard")
 
+    def show_gesture():
+        """웹캠 손짓 화면 보여 주기 (창 그리기는 메인에서만 해야 안전)"""
+        if gesture.running and gesture.frame is not None:
+            cv2.imshow(GESTURE_WINDOW, gesture.frame)
+            state["cam_shown"] = True
+        elif not gesture.running and state["cam_shown"]:
+            cv2.destroyWindow(GESTURE_WINDOW)
+            state["cam_shown"] = False
+
     def on_idle():
-        """Unity 를 기다리는 동안에도 창과 음성이 살아 있게"""
+        """Unity 를 기다리는 동안에도 창과 음성, 손짓이 살아 있게"""
+        show_gesture()
         handle_key(cv2.waitKey(20) & 0xFF)
         pump()
         return state["quit"]
@@ -103,13 +119,14 @@ def main():
 
             h, w = frame.shape[:2]
             cv2.rectangle(frame, (0, 0), (w, 60), (0, 0, 0), -1)
-            cv2.putText(frame, voice.status, (10, 25),
+            cv2.putText(frame, voice.status + "   " + gesture.status, (10, 25),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2)
             cv2.putText(frame, "last: " + state["last"], (10, 50),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            cv2.putText(frame, "V: speak  1-5: item  C: cancel  G: follow  S: stop  ESC",
-                        (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(frame, "V: speak  H: hand cam  1-5  C: cancel  G: follow  S: stop  ESC",
+                        (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
             cv2.imshow(WINDOW, frame)
+            show_gesture()
 
             # 운전 명령(cmd)은 보내지 않음 -> Unity 머리가 운전
             reply = {"items": items}
@@ -122,6 +139,7 @@ def main():
 
         conn.close()
 
+    gesture.running = False
     server.close()
     cv2.destroyAllWindows()
 
